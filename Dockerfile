@@ -74,6 +74,7 @@ RUN mkdir -p /gclient && \
 #########################################
 FROM ubuntu:jammy as xrdpbuilder
 
+ARG XRDP_PULSE_VERSION=v0.7
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt update && \
@@ -88,8 +89,18 @@ RUN apt update && \
     	pulseaudio \
 	xrdp
 
+RUN mkdir -p /buildout/var/lib/xrdp-pulseaudio-installer && \
+    tmp=$(mktemp -d); cd "$tmp" && \
+    pulseaudio_version=$(dpkg-query -W -f='${source:Version}' pulseaudio|awk -F: '{print $2}') && \
+    pulseaudio_upstream_version=$(dpkg-query -W -f='${source:Upstream-Version}' pulseaudio) && \
+    set -- $(apt-cache policy pulseaudio | fgrep -A1 '***' | tail -1) && \
+    mirror=$2 && \
+    suite=${3#*/} && \
+    dget -u "$mirror/pool/$suite/p/pulseaudio/pulseaudio_$pulseaudio_version.dsc" && \
+    cd "pulseaudio-$pulseaudio_upstream_version"
+
 #########################################
-### Build Web Client
+### Build Desktop
 #########################################
 FROM ubuntu:jammy
 
