@@ -1,7 +1,11 @@
-FROM ubuntu:jammy as builder
+#########################################
+### Build guacd 
+#########################################
+FROM ubuntu:jammy as guacdbuilder
 
+ENV DEBIAN_FRONTEND=noninteractive
 ARG GUACD_VERSION=1.5.0
-RUN apt-get update && \
+RUN apt-get update -yq && \
     apt-get install -yq --no-install-recommends \
         ca-certificates \
 	autoconf \
@@ -37,9 +41,71 @@ RUN mkdir -p /tmp/guacd && \
     PREFIX=/usr checkinstall -y -D --nodoc --pkgname guacd --pkgversion "${GUACD_VERSION}" --pakdir /tmp --exclude "/usr/share/man","/usr/include","/etc" && \
     mv /tmp/guacd_${GUACD_VERSION}-*.deb /tmp/out/guacd_${GUACD_VERSION}.deb
 
+#########################################
+### Build Web Client
+#########################################
 
-FROM ubuntu:jammy
+FROM ubuntu:focal as nodebuilder
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update -yq && \
+    apt-get install -y \
+	gnupg \
+	curl && \
+     curl -s https://deb.nodesource.com/gpgkey/nodesource.gpg.key | apt-key add - && \
+     echo 'deb https://deb.nodesource.com/node_14.x focal main'	> /etc/apt/sources.list.d/nodesource.list && \
+     apt-get update && \
+     apt-get install -yq --no-install-recommends \
+	g++ \
+	gcc \
+	libpam0g-dev \
+	make \
+	nodejs
+
+RUN mkdir -p /gclient && \
+    curl -o /tmp/gclient.tar.gz -L "https://github.com/linuxserver/gclient/archive/1.1.2.tar.gz" && \
+    tar xf /tmp/gclient.tar.gz -C /gclient/ --strip-components=1 && \
+    cd /gclient && \
+    npm install
+
+
+#########################################
+### Build XRDP
+#########################################
+FROM ubuntu:jammy as xrdpbuilder
+
+ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt update && \
-	apt install -q -y --no-install-recommends guacd supervisor xrdp xfce4 xfce4-goodies curl pulseaudio
+    apt install -qy \
+	build-essential \
+	devscripts \
+	dpkg-dev \
+	git \
+	libpulse-dev \
+	pulseaudio && \
+    apt build-dep -y \
+    	pulseaudio \
+	xrdp
 
+#########################################
+### Build Web Client
+#########################################
+FROM ubuntu:jammy
+
+ARG GUACD_VERSION=1.5.0
+ENV DEBIAN_FRONTEND=noninteractive
+
+COPY --from=guacdbuilder /tmp/out /tmp/out
+COPY --from=nodebuilder /gclient /gclient
+
+RUN dpkg -i /tmp/out/guacd_${GUACD_VERSION}.deb
+RUN apt update && \
+    apt install -qy \ 
+	gnupg ca-certificates curl lsb-release libcairo2-dev
+
+RUN curl -s https://deb.nodesource.com/gpgkey/nodesource.gpg.key | gpg --dearmor | tee /usr/share/keyrings/nodesource.gpg >/dev/null && \
+    echo 'deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_14.x jammy main' > /etc/apt/sources.list.d/nodesource.list && \
+    echo 'deb-src [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_14.x jammy main' >> /etc/apt/sources.list.d/nodesource.list && \
+    apt update -y && \
+    apt install -qy nodejs
