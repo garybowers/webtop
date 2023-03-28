@@ -72,12 +72,14 @@ RUN mkdir -p /gclient && \
 #########################################
 ### Build XRDP
 #########################################
-FROM ubuntu:jammy as xrdpbuilder
+
+FROM ubuntu:focal as xrdpbuilder
 
 ARG XRDP_PULSE_VERSION=v0.7
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt update && \
+RUN sed -i 's/# deb-src/deb-src/g' /etc/apt/sources.list && \
+    apt update && \
     apt install -qy \
 	build-essential \
 	devscripts \
@@ -97,26 +99,109 @@ RUN mkdir -p /buildout/var/lib/xrdp-pulseaudio-installer && \
     mirror=$2 && \
     suite=${3#*/} && \
     dget -u "$mirror/pool/$suite/p/pulseaudio/pulseaudio_$pulseaudio_version.dsc" && \
-    cd "pulseaudio-$pulseaudio_upstream_version"
+    cd "pulseaudio-$pulseaudio_upstream_version" && \
+    ./configure && \
+    cd - && \
+    git clone https://github.com/neutrinolabs/pulseaudio-module-xrdp.git && \
+    cd pulseaudio-module-xrdp && \
+    git checkout ${XRDP_PULSE_VERSION} && \
+    ./bootstrap && \ 
+    ./configure PULSE_DIR="$tmp/pulseaudio-$pulseaudio_upstream_version" && \
+    make -j 2 && \
+    install -t "/buildout/var/lib/xrdp-pulseaudio-installer" -D -m 644 src/.libs/*.so
+
+RUN cd /tmp && \
+    apt-get source xrdp && \
+    cd xrdp-* && \
+    sed -i 's/--enable-fuse/--disable-fuse/g' debian/rules && \
+    debuild -b -uc -us && \
+    cp -ax ../xrdp_*.deb /buildout/xrdp.deb
 
 #########################################
-### Build Desktop
+### Build Desktop Base
 #########################################
-FROM ubuntu:jammy
+
+FROM ubuntu:jammy as webtopbase
 
 ARG GUACD_VERSION=1.5.0
 ENV DEBIAN_FRONTEND=noninteractive
 
 COPY --from=guacdbuilder /tmp/out /tmp/out
-COPY --from=nodebuilder /gclient /gclient
+COPY --from=nodebuilder /gclient /usr/local/gclient
+COPY --from=xrdpbuilder /buildout /tmp/out
 
-RUN dpkg -i /tmp/out/guacd_${GUACD_VERSION}.deb
 RUN apt update && \
     apt install -qy \ 
-	gnupg ca-certificates curl lsb-release libcairo2-dev
+	apt-transport-https \
+	apt-utils \
+	ca-certificates \
+	curl \
+	dbus-x11 \
+	gawk \
+	gnupg2 \
+	libfuse2 \
+	libx11-dev \
+	libxfixes3 \
+	libxml2 \
+	libssl-dev \
+	libxrandr2 \
+	openssh-client \
+	pulseaudio \
+	software-properties-common \
+	sudo \
+	x11-apps \
+	x11-xserver-utils \
+	xfonts-base \
+	xorgxrdp \
+	xrdp \
+	xserver-xorg-core \
+	xserver-xorg-video-intel \
+	xserver-xorg-video-amdgpu \
+	xserver-xorg-video-ati \
+	xutils \
+	zlib1g \
+	lsb-release \
+	libcairo2-dev \
+        xterm \
+        libfreerdp2-2 \
+	libfreerdp-client2-2 \
+	libossp-uuid16 \
+        obconf \
+	openbox \
+        wget
 
 RUN curl -s https://deb.nodesource.com/gpgkey/nodesource.gpg.key | gpg --dearmor | tee /usr/share/keyrings/nodesource.gpg >/dev/null && \
     echo 'deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_14.x jammy main' > /etc/apt/sources.list.d/nodesource.list && \
     echo 'deb-src [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_14.x jammy main' >> /etc/apt/sources.list.d/nodesource.list && \
     apt update -y && \
-    apt install -qy nodejs
+    apt install -qy nodejs && \
+    cd /tmp && \
+    wget http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1-1ubuntu2.1~18.04.21_amd64.deb && \
+    dpkg -i libssl1.1_1.1.1-1ubuntu2.1~18.04.21_amd64.deb && \
+    dpkg -i /tmp/out/xrdp.deb && \
+    dpkg -i /tmp/out/guacd_${GUACD_VERSION}.deb && \
+    WEBSOCAT_RELEASE=$(curl -sX GET "https://api.github.com/repos/vi/websocat/releases/latest" | awk '/tag_name/{print $4;exit}' FS='[""]'); \
+    curl -o /usr/bin/websocat -fL "https://github.com/vi/websocat/releases/download/${WEBSOCAT_RELEASE}/websocat.x86_64-unknown-linux-musl" && \
+    chmod +x /usr/bin/websocat && \
+    apt-get autoclean && \
+    rm -rf /var/lib/apt/lists/* \
+           /var/tmp/* \
+           /tmp/*
+    
+EXPOSE 3000
+
+FROM webtopbase
+
+RUN apt update && \
+    apt install -yq --no-install-recommends \
+	supervisor \
+	vim \
+	git \
+        dolphin \
+        kate \
+        kubuntu-desktop \
+        konsole \
+        kmix \
+        firefox
+
+ADD /root /
